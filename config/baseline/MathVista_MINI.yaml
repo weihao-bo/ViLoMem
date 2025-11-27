@@ -1,0 +1,35 @@
+# Baseline Agent Configuration (No Memory)
+# This configuration file is for the baseline VL agent without memory functionality
+
+# ========== Dataset Configuration ==========
+dataset:
+  root_dir: "${DATASET_ROOT_DIR}"  # Set via environment variable
+  benchmark: "MathVista_MINI"
+  split: null
+  path: null
+  start_index: 1
+  # Number of samples to process:
+  # - Set to 0 to process ALL examples
+  # - Set to N (e.g., 2, 10, 100) to process only first N examples
+  limit: 2
+  task_filter: null
+  force_reconvert: false
+
+# ========== Output Configuration ==========
+output:
+  dir_prefix: "output/baseline_gpt-4.1"
+  enable_tracing: false
+
+# ========== Main Inference Model Configuration ==========
+model:
+  name: "openai:openai/gpt-4.1"  # GPT-4.1 via OpenRouter
+  temperature: 0.7
+  max_tokens: 10240
+
+# ========== Verification Configuration ==========
+verification:
+  enable: true
+
+# ========== Concurrent Execution Configuration ==========
+concurrent_execution:
+  max_workers: 1

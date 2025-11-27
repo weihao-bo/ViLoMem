@@ -1,0 +1,105 @@
+# ViLoMem Agent Configuration
+# This configuration file enables both logic and visual memory functionality
+
+# ========== Dataset Configuration ==========
+dataset:
+  root_dir: "${DATASET_ROOT_DIR}"  # Set via environment variable
+  benchmark: "MathVista_MINI"
+  split: null
+  path: null
+  start_index: 1
+  # Number of samples to process:
+  # - Set to 0 to process ALL examples
+  # - Set to N (e.g., 2, 10, 100) to process only first N examples
+  limit: 2
+  task_filter: null
+  force_reconvert: false
+
+# ========== Output Configuration ==========
+output:
+  dir_prefix: "output/ViLoMem_gpt-4.1"
+  enable_tracing: false
+  memory_list: []  # List of previous output directories for memory reuse
+
+# ========== Main Inference Model Configuration ==========
+model:
+  name: "openai:openai/gpt-4.1"  # GPT-4.1 via OpenRouter
+  temperature: 0.7
+  max_tokens: 8192
+  system_prompt: |-
+    Objective:
+        Solve the given problem using a step by step process.
+
+    Expected Output Structure:
+    Step 1:
+    Step 2:
+    ...
+    Step n: Final Answer: \boxed{answer}
+
+    Question:
+
+# ========== Verification Configuration ==========
+verification:
+  enable: true
+
+# ========== Logic Memory Configuration ==========
+logic_memory:
+  retrieval:
+    enable: true
+    limit: 3
+    similarity_threshold: 0.7
+  generation:
+    enable: true
+  store:
+    file_path: "logic_memories.json"
+    embedding_model: "local:qwen3-embedding"
+
+# ========== Problem Analysis Node Configuration ==========
+analysis:
+  model: "openai:openai/gpt-4.1"
+  temperature: 0.7
+  max_tokens: 1024
+
+# ========== Logic Memory Generation Node Configuration ==========
+logic_memory_generation:
+  model: "openai:openai/gpt-4.1"
+  temperature: 0.7
+  max_tokens: 2048
+
+# ========== Visual Memory Configuration ==========
+visual_memory:
+  retrieval:
+    enable: false  # Disabled for testing without local embedding model
+    limit: 3
+    similarity_threshold: 0.7
+    enable_text_rerank: true
+  generation:
+    enable: false  # Disabled for testing without local embedding model
+  store:
+    file_path: "visual_memories.json"
+    embedding_model: "qwen:qwen2.5-vl-embedding"
+    embedding_top_n: 10
+    text_embedding_model: "local:qwen3-embedding"
+
+# ========== Visual Memory Generation Node Configuration ==========
+visual_memory_generation:
+  model: "openai:openai/gpt-4.1"
+  temperature: 0.7
+  max_tokens: 2048
+
+# ========== Heatmap Generation Configuration (Qwen2.5-VL Attention) ==========
+heatmap_generation:
+  enable: false  # Disabled - requires local Qwen2.5-VL model deployment
+  debug: true  # Save heatmap images for debugging
+  include_question_in_heatmap: true
+  qwen25vl:
+    model: Qwen/Qwen2.5-VL-3B-Instruct
+    general_prompt: Describe this image.
+    attention_layer: 22
+    devices:
+      - cuda:0
+    per_device_max_parallel: 5
+
+# ========== Concurrent Execution Configuration ==========
+concurrent_execution:
+  max_workers: 1
