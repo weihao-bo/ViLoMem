@@ -56,7 +56,7 @@ class DevicePool:
     queue: asyncio.Queue[str]
 
     @classmethod
-    def create(cls, devices: Sequence[str], per_device_limit: int) -> "DevicePool":
+    def create(cls, devices: Sequence[str], per_device_limit: int) -> DevicePool:
         per_device_limit = max(1, per_device_limit)
         queue: asyncio.Queue[str] = asyncio.Queue()
         for device in devices:

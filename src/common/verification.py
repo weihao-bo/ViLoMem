@@ -227,11 +227,21 @@ def verify_prediction(
     benchmark_config: Any | None = None,
     question: str | None = None,
 ) -> Dict[str, Any]:
-    """Run the full verification pipeline (VLMEval → parser → math-verify)."""
+    """Run the full verification pipeline (VLMEval → parser → math-verify).
+
+    Returns:
+        Dict with keys:
+        - verified: bool - whether the answer is correct
+        - score: float - verification score (0.0-1.0), for continuous metrics like ANLS
+        - verification_method: str - which method was used
+        - verification_error: str | None - error message if failed
+        - extracted_answer: Any - the extracted/parsed answer
+        - verification_attempts: list - all verification attempts
+    """
     attempts: list[Dict[str, Any]] = []
     metadata = sample_metadata or {}
 
-    # Stage 0: MathVista-specific VLMEvalKit verification (full pipeline)
+    # Stage 0: Benchmark-specific VLMEvalKit verification (OCRBench, DocVQA, MathVista, etc.)
     vlmeval_result = vlmeval_verify_sample(
         prediction=prediction,
         gold_answer=gold_answer,
@@ -242,10 +252,13 @@ def verify_prediction(
         vl_verified, vl_details = vlmeval_result
         vl_details.setdefault("stage", "vlmeval")
         attempts.append(vl_details)
+        # Get score from details (continuous for ANLS, binary for others)
+        score = vl_details.get("score", 1.0 if vl_verified else 0.0)
         if vl_verified:
             attempts_serializable = _to_serializable(attempts)
             return {
                 "verified": True,
+                "score": score,
                 "verification_method": vl_details.get("method"),
                 "verification_error": None,
                 "extracted_answer": _to_serializable(
@@ -278,6 +291,7 @@ def verify_prediction(
             attempts_serializable = _to_serializable(attempts)
             return {
                 "verified": True,
+                "score": 1.0,
                 "verification_method": vl_details["method"],
                 "verification_error": None,
                 "extracted_option": vl_details.get("extracted_option"),
@@ -301,6 +315,7 @@ def verify_prediction(
         attempts_serializable = _to_serializable(attempts)
         return {
             "verified": False,
+            "score": 0.0,
             "verification_method": parser_details.get("method"),
             "verification_error": parser_details.get("error"),
             "extracted_answer": _to_serializable(
@@ -314,6 +329,7 @@ def verify_prediction(
         attempts_serializable = _to_serializable(attempts)
         return {
             "verified": True,
+            "score": 1.0,
             "verification_method": parser_details["method"],
             "verification_error": None,
             "extracted_answer": _to_serializable(
@@ -335,6 +351,7 @@ def verify_prediction(
         attempts_serializable = _to_serializable(attempts)
         return {
             "verified": True,
+            "score": 1.0,
             "verification_method": math_details["method"],
             "verification_error": None,
             "extracted_answer": _to_serializable(math_details.get("extracted_answer")),
@@ -359,6 +376,7 @@ def verify_prediction(
         attempts_serializable = _to_serializable(attempts)
         return {
             "verified": True,
+            "score": 1.0,
             "verification_method": llm_details["method"],
             "verification_error": None,
             "extracted_answer": _to_serializable(llm_details.get("extracted_answer")),
@@ -366,11 +384,18 @@ def verify_prediction(
             "verification_attempts": attempts_serializable,
         }
 
-    # All stages failed
+    # All stages failed - try to get score from attempts (for ANLS benchmarks)
     last_attempt = attempts[-1] if attempts else {}
+    # Check if any attempt has a continuous score (e.g., ANLS)
+    final_score = 0.0
+    for attempt in attempts:
+        if "score" in attempt and attempt.get("score", 0.0) > final_score:
+            final_score = attempt["score"]
+
     attempts_serializable = _to_serializable(attempts)
     return {
         "verified": False,
+        "score": final_score,
         "verification_method": last_attempt.get("method"),
         "verification_error": last_attempt.get("error", "verification_failed"),
         "extracted_answer": _to_serializable(last_attempt.get("extracted_answer")),

@@ -14,34 +14,15 @@ from typing import Any, Dict
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 
+from common.models import load_chat_model
 from common.prompt_utils import build_combined_prompt
-from common.retry import async_retry_with_backoff
-from common.utils import get_message_text, load_chat_model
+from common.utils import get_message_text
 from common.verification import verify_prediction
 from vl_agent_baseline.context import Context
 from vl_agent_baseline.state import EvaluationState, State
 
 # Get logger
 logger = logging.getLogger("qwen_vl_eval.nodes")
-
-# ========== Retry-wrapped Model Invocation Helper ==========
-
-
-@async_retry_with_backoff(max_retries=3, initial_delay=1.0)
-async def _invoke_model_with_retry(model: Any, messages: list) -> AIMessage:
-    """Invoke model with automatic retry on transient failures.
-
-    Args:
-        model: Configured LangChain chat model
-        messages: List of messages to send to the model
-
-    Returns:
-        AIMessage response from the model
-    """
-    response = await model.ainvoke(messages)
-    if not isinstance(response, AIMessage):
-        raise ValueError(f"Expected AIMessage, got {type(response)}")
-    return response
 
 
 # ========== Node Functions ==========
@@ -137,7 +118,12 @@ async def call_model(
         system_section=system_section,
     )
 
-    response = await _invoke_model_with_retry(configured_model, [message_to_send])
+    # Use LangChain's built-in retry mechanism
+    model_with_retry = configured_model.with_retry(
+        stop_after_attempt=3,
+        wait_exponential_jitter=True,
+    )
+    response = await model_with_retry.ainvoke([message_to_send])
 
     result: Dict[str, AIMessage | str | None] = {"messages": [response]}  # type: ignore
     if isinstance(state, EvaluationState):
@@ -242,10 +228,7 @@ async def save_output(
     output_path = Path(state.output_dir)
     results_file = output_path / "results.json"
 
-    # Extract model input components from messages (for reproducibility)
-    # This shows how the prompt was constructed for the model
-    model_input_text = None
-    user_prompt = None  # The actual user message sent to the model
+    user_prompt = None
 
     if state.messages:
         for msg in state.messages:

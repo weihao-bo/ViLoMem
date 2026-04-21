@@ -9,7 +9,8 @@ from typing import Any
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from common.utils import load_chat_model, strip_reasoning_tags
+from common.models import load_chat_model
+from common.utils import strip_reasoning_tags
 
 logger = logging.getLogger(__name__)
 

@@ -220,7 +220,7 @@ class Context:
     benchmark_root_dir: str = field(
         default="",
         metadata={
-            "description": "Root directory for all benchmarks (e.g., '/Users/bwh/Documents/Datasets'). "
+            "description": "Root directory for all benchmarks. "
             "Used to resolve benchmark-scoped image paths for cross-benchmark memory reuse. "
             "Should match the 'root_dir' in dataset configuration.",
         },
@@ -302,6 +302,19 @@ class Context:
         },
     )
 
+    memory_generation_score_threshold: float = field(
+        default=0.7,
+        metadata={
+            "description": "Score threshold for memory generation (0.0 to 1.0). "
+            "Memory is only generated when verification_score < threshold. "
+            "For binary benchmarks: 0.7 means generate only on wrong answers (score=0). "
+            "For continuous benchmarks (ANLS): generate when score < 0.7.",
+            "json_schema_extra": {
+                "langgraph_nodes": ["generate_logic_memory", "generate_visual_memory"]
+            },
+        },
+    )
+
     # ========== Logic Memory Retrieval Configuration ==========
     logic_memory_retrieval_limit: int = field(
         default=3,
@@ -329,6 +342,17 @@ class Context:
         },
     )
 
+    logic_memory_root_dir: str = field(
+        default="",
+        metadata={
+            "description": "Root directory for reading logic memories. "
+            "If empty, falls back to output_dir. "
+            "Allows complete decoupling of memory storage from output directory. "
+            "Example: 'output/merged_memory' to use a pre-merged memory library.",
+            "json_schema_extra": {"langgraph_nodes": ["retrieve_logic_memories"]},
+        },
+    )
+
     logic_memory_embedding_model: str = field(
         default="local:qwen3-embedding",
         metadata={
@@ -338,6 +362,17 @@ class Context:
             "- qwen/dashscope: DashScope text embedding API (e.g., 'qwen:text-embedding-v2') "
             "- openai: OpenAI text embedding API (e.g., 'openai:text-embedding-3-small'). "
             "Uses cosine similarity for semantic search.",
+        },
+    )
+
+    logic_memory_pool_limit: int = field(
+        default=0,
+        metadata={
+            "description": "Maximum number of logic memories to load from the pool. "
+            "Set to 0 to load all memories (no limit). "
+            "When > 0, only the first N memories are loaded for retrieval. "
+            "Useful for testing with different memory pool sizes.",
+            "json_schema_extra": {"langgraph_nodes": ["retrieve_logic_memories"]},
         },
     )
 
@@ -439,6 +474,17 @@ class Context:
         },
     )
 
+    visual_memory_root_dir: str = field(
+        default="",
+        metadata={
+            "description": "Root directory for reading visual memories. "
+            "If empty, falls back to output_dir. "
+            "Allows complete decoupling of memory storage from output directory. "
+            "Example: 'output/merged_memory' to use a pre-merged memory library.",
+            "json_schema_extra": {"langgraph_nodes": ["retrieve_visual_memories"]},
+        },
+    )
+
     visual_embedding_model: str = field(
         default="qwen:qwen2.5-vl-embedding",
         metadata={
@@ -448,12 +494,33 @@ class Context:
         },
     )
 
+    visual_memory_pool_limit: int = field(
+        default=0,
+        metadata={
+            "description": "Maximum number of visual memories to load from the pool. "
+            "Set to 0 to load all memories (no limit). "
+            "When > 0, only the first N memories are loaded for retrieval. "
+            "Useful for testing with different memory pool sizes.",
+            "json_schema_extra": {"langgraph_nodes": ["retrieve_visual_memories"]},
+        },
+    )
+
     visual_embedding_top_n: int = field(
         default=10,
         metadata={
             "description": "First-stage candidate size for visual memory retrieval. "
             "When visual_memory_enable_text_rerank=False, these candidates are filtered by similarity threshold. "
-            "When visual_memory_enable_text_rerank=True, these candidates are passed to text embedding similarity as the second stage.",
+            "When visual_memory_enable_text_rerank=True, these candidates are passed to text embedding similarity as the second stage. "
+            "Special case: When set to 0 and enable_text_rerank=True, Stage 1 (image embedding) is completely skipped, "
+            "and Stage 2 (text embedding) is applied directly to all memories. This is useful for ablation experiments.",
+        },
+    )
+
+    visual_embedding_batch_size: int = field(
+        default=10,
+        metadata={
+            "description": "Batch size for precomputing visual embeddings. "
+            "Controls how many images are processed in each batch during embedding precomputation.",
         },
     )
 

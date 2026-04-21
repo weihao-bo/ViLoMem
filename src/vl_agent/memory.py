@@ -20,8 +20,6 @@ from typing import Any, Sequence
 import httpx
 import numpy as np
 
-from common.retry import async_retry_with_backoff
-
 # Get logger - will inherit configuration from parent qwen_vl_eval logger
 logger = logging.getLogger("qwen_vl_eval.memory")
 
@@ -248,27 +246,23 @@ def merge_memories_from_directories(
 # ========== Text Embedding API (Local vLLM) ==========
 
 
-def _cosine_similarity(vec1: list[float], vec2: list[float]) -> float:
-    """Compute cosine similarity between two vectors.
+def _cosine_similarities_batch(
+    query: np.ndarray, matrix: np.ndarray
+) -> np.ndarray:
+    """Cosine similarity of `query` (D,) against each row of `matrix` (N, D).
 
-    Args:
-        vec1: First vector
-        vec2: Second vector
-
-    Returns:
-        Cosine similarity score (0.0 to 1.0)
+    Returns a (N,) float array. Zero-norm rows map to 0.0 similarity.
     """
-    import math
+    q_norm = np.linalg.norm(query)
+    m_norms = np.linalg.norm(matrix, axis=1)
+    denom = q_norm * m_norms
+    # Avoid division by zero; zero-norm rows naturally yield 0 dot product.
+    safe_denom = np.where(denom == 0, 1.0, denom)
+    sims = (matrix @ query) / safe_denom
+    sims[denom == 0] = 0.0
+    return sims
 
-    dot_product = sum(a * b for a, b in zip(vec1, vec2))
-    norm1 = math.sqrt(sum(a * a for a in vec1))
-    norm2 = math.sqrt(sum(b * b for b in vec2))
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    return dot_product / (norm1 * norm2)
 
-
-@async_retry_with_backoff(max_retries=3, initial_delay=1.0)
 async def compute_text_embeddings(
     texts: list[str],
     model: str = "local:qwen3-embedding",
@@ -324,8 +318,20 @@ async def _compute_local_text_embeddings(
     model_name: str,
     api_key: str | None = None,
     base_url: str | None = None,
+    max_retries: int = 3,
 ) -> list[list[float]]:
-    """Compute text embeddings using local vLLM embedding API."""
+    """Compute text embeddings using local vLLM embedding API.
+    
+    Args:
+        texts: List of texts to embed
+        model_name: Model name for the embedding API
+        api_key: API key (optional, uses env var if not provided)
+        base_url: Base URL for the embedding API (optional, uses env var if not provided)
+        max_retries: Maximum number of retries for transient errors (default: 3)
+    
+    Returns:
+        List of embedding vectors
+    """
     # Get API credentials
     if not api_key:
         api_key = os.environ.get(
@@ -359,29 +365,78 @@ async def _compute_local_text_embeddings(
         "Content-Type": "application/json",
     }
 
-    # Call API
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            embeddings_url,
-            headers=headers,
-            json=payload,
-            timeout=120.0,
-        )
-        response.raise_for_status()
-        result = response.json()
+    # Reuse one AsyncClient across all retry attempts so we keep the TCP/SSL
+    # connection pool warm. Each attempt only wraps the network round-trip.
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        last_error: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                response = await client.post(
+                    embeddings_url,
+                    headers=headers,
+                    json=payload,
+                )
+                response.raise_for_status()
+                result = response.json()
 
-    # Extract embeddings from response
-    # Expected format: {"data": [{"embedding": [...], "index": 0}, ...]}
-    data = result.get("data", [])
-    if not data:
-        logger.warning(f"Embeddings API returned empty data. Response: {result}")
+                data = result.get("data", [])
+                if not data:
+                    logger.warning(f"Embeddings API returned empty data. Response: {result}")
+                    return [[] for _ in texts]
+
+                data_sorted = sorted(data, key=lambda x: x.get("index", 0))
+                return [item.get("embedding", []) for item in data_sorted]
+
+            except httpx.ConnectError as e:
+                last_error = e
+                if attempt >= max_retries:
+                    logger.error(
+                        f"Local embedding API connection failed after {max_retries} attempts: {e}. "
+                        f"URL: {embeddings_url}"
+                    )
+                    raise
+                backoff = min(2 ** attempt, 10)
+                logger.warning(
+                    f"Local embedding API connection error (attempt {attempt}/{max_retries}): {e}. "
+                    f"URL: {embeddings_url}. Retrying in {backoff}s..."
+                )
+                await asyncio.sleep(backoff)
+
+            except httpx.TimeoutException as e:
+                last_error = e
+                if attempt >= max_retries:
+                    logger.error(
+                        f"Local embedding API timeout after {max_retries} attempts: {e}. "
+                        f"URL: {embeddings_url}"
+                    )
+                    raise
+                backoff = min(2 ** attempt, 10)
+                logger.warning(
+                    f"Local embedding API timeout (attempt {attempt}/{max_retries}): {e}. "
+                    f"URL: {embeddings_url}. Retrying in {backoff}s..."
+                )
+                await asyncio.sleep(backoff)
+
+            except httpx.HTTPStatusError as e:
+                # 4xx: don't retry. 5xx: retry within budget.
+                if e.response.status_code < 500 or attempt >= max_retries:
+                    logger.error(
+                        f"Local embedding API HTTP error: status={e.response.status_code}, "
+                        f"url={embeddings_url}, response={e.response.text[:500] if e.response.text else 'N/A'}"
+                    )
+                    raise
+                last_error = e
+                backoff = min(2 ** attempt, 10)
+                logger.warning(
+                    f"Local embedding API server error (attempt {attempt}/{max_retries}): "
+                    f"status={e.response.status_code}, url={embeddings_url}. "
+                    f"Retrying in {backoff}s..."
+                )
+                await asyncio.sleep(backoff)
+
+        if last_error:
+            raise last_error
         return [[] for _ in texts]
-
-    # Sort by index and extract embeddings
-    data_sorted = sorted(data, key=lambda x: x.get("index", 0))
-    embeddings = [item.get("embedding", []) for item in data_sorted]
-
-    return embeddings
 
 
 async def _compute_dashscope_text_embeddings(
@@ -837,15 +892,19 @@ async def retrieve_memories_by_text_embedding(
     try:
         query_embeddings = await compute_text_embeddings([query], model=model)
         if not query_embeddings or not query_embeddings[0]:
-            logger.error("Failed to compute query embedding")
+            logger.error(f"Failed to compute query embedding: empty result from model={model}")
             return []
         query_embedding = query_embeddings[0]
     except Exception as e:
-        logger.error(f"Error computing query embedding: {e}")
+        logger.error(
+            f"Error computing query embedding: {type(e).__name__}: {e}. "
+            f"Model: {model}, Query length: {len(query)}"
+        )
         return []
 
-    # 2. Load memory embeddings and compute similarities
-    similarities = []
+    # 2. Collect all loadable memory embeddings, then score them in one matmul.
+    valid_memories: list[dict] = []
+    valid_vectors: list[np.ndarray] = []
     missing_embeddings = 0
 
     for memory in memories:
@@ -853,7 +912,6 @@ async def retrieve_memories_by_text_embedding(
         if not memory_id:
             continue
 
-        # Try to load cached embedding
         npy_path = get_text_embedding_path(memory_id, memory_type, output_dir, model)
         if not npy_path.exists():
             logger.debug(f"Embedding cache not found for memory {memory_id}")
@@ -865,17 +923,22 @@ async def retrieve_memories_by_text_embedding(
             logger.warning(f"Failed to load embedding for memory {memory_id}")
             continue
 
-        memory_embedding = memory_embedding_np.tolist()
-
-        # Calculate similarity
-        similarity = _cosine_similarity(query_embedding, memory_embedding)
-        similarities.append((memory, similarity))
+        valid_memories.append(memory)
+        valid_vectors.append(memory_embedding_np)
 
     if missing_embeddings > 0:
         logger.warning(
             f"{missing_embeddings} memories have missing embeddings. "
             f"Run batch_precompute_text_embeddings() to cache them."
         )
+
+    if not valid_vectors:
+        return []
+
+    matrix = np.stack(valid_vectors, axis=0)
+    query_np = np.asarray(query_embedding, dtype=matrix.dtype)
+    sims = _cosine_similarities_batch(query_np, matrix)
+    similarities = list(zip(valid_memories, (float(s) for s in sims)))
 
     # 3. Sort by similarity (highest first)
     similarities.sort(key=lambda x: x[1], reverse=True)
@@ -1154,10 +1217,10 @@ def resolve_image_full_path(benchmark_scoped_path: str, root_dir: str | Path) ->
 
     Args:
         benchmark_scoped_path: Path like "MathVision_MINI/15.jpg"
-        root_dir: Dataset root directory (e.g., "/Users/bwh/Documents/Datasets")
+        root_dir: Dataset root directory
 
     Returns:
-        Full path: /Users/bwh/Documents/Datasets/MathVision_MINI/images/15.jpg
+        Full path: <root_dir>/MathVision_MINI/images/15.jpg
 
     Raises:
         ValueError: If benchmark_scoped_path format is invalid
@@ -1874,7 +1937,8 @@ async def merge_memories(
     """
     from langchain_core.messages import AIMessage, HumanMessage
 
-    from common.utils import get_message_text, load_chat_model
+    from common.models import load_chat_model
+    from common.utils import get_message_text
 
     # Prepare prompt
     existing_guideline = existing_memory.get("guideline", "")

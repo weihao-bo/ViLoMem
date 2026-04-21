@@ -220,13 +220,13 @@ def post_check(
             res = can_infer(response, choices)
 
             # If can_infer fails, fallback to parse_multi_choice_response
-            if not res or res == False:
+            if not res:
                 from tools.vlmeval_matching import parse_multi_choice_response
 
                 all_choices = list(choices.keys())
                 if not all_choices:
                     # No choices available - cannot proceed with MCQ verification
-                    logger.warning(f"MCQ verification failed: choices is empty")
+                    logger.warning("MCQ verification failed: choices is empty")
                     if prefetch:
                         return False
                 else:

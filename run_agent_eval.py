@@ -164,15 +164,20 @@ def generate_output_dir(output_dir_prefix: str | Path, config_file_path: str) ->
     """Create an output directory using the config file name with de-duplication.
 
     The directory name is the stem of ``config_file_path`` (e.g., ``HallusionBench``)
-    under ``output_dir_prefix``. If the directory already exists, numeric suffixes
-    (``name2``, ``name3`` ...) are appended until an unused path is found.
+    under ``output_dir_prefix``. If ``output_dir_prefix`` already ends with the
+    config stem, use it directly to avoid nested duplicate names. If the directory
+    already exists, numeric suffixes (``name2``, ``name3`` ...) are appended until
+    an unused path is found.
     """
 
     prefix_path = Path(output_dir_prefix)
     prefix_path.mkdir(parents=True, exist_ok=True)
 
     base_name = Path(config_file_path).stem
-    candidate = prefix_path / base_name
+    if prefix_path.name == base_name:
+        candidate = prefix_path
+    else:
+        candidate = prefix_path / base_name
 
     if candidate.exists() and not candidate.is_dir():
         raise FileExistsError(
@@ -185,7 +190,10 @@ def generate_output_dir(output_dir_prefix: str | Path, config_file_path: str) ->
 
     suffix = 2
     while True:
-        candidate = prefix_path / f"{base_name}{suffix}"
+        if prefix_path.name == base_name:
+            candidate = prefix_path.parent / f"{base_name}{suffix}"
+        else:
+            candidate = prefix_path / f"{base_name}{suffix}"
         if candidate.exists() and not candidate.is_dir():
             raise FileExistsError(
                 f"Output path already exists as a file: {candidate}. Please remove or rename it."
@@ -286,7 +294,6 @@ def create_memory_context(config: dict[str, Any]):
     logic_memory_gen_config = config.get("logic_memory_generation", {})
     visual_memory_gen_config = config.get("visual_memory_generation", {})
     heatmap_gen_config = config.get("heatmap_generation", {})
-    keyword_extraction_config = config.get("keyword_extraction", {})
     output_config = config.get("output", {})
 
     # Extract benchmark config (for cross-benchmark memory reuse)
@@ -324,6 +331,9 @@ def create_memory_context(config: dict[str, Any]):
         "logic_memory_enable_generation": logic_memory_config.get("generation", {}).get(
             "enable", True
         ),
+        "memory_generation_score_threshold": config.get("memory", {}).get(
+            "generation_score_threshold", 0.7
+        ),
         "logic_memory_retrieval_limit": logic_memory_config.get("retrieval", {}).get(
             "limit", 3
         ),
@@ -335,6 +345,12 @@ def create_memory_context(config: dict[str, Any]):
         ),
         "logic_memory_embedding_model": logic_memory_config.get("store", {}).get(
             "embedding_model", "local:qwen3-embedding"
+        ),
+        "logic_memory_pool_limit": logic_memory_config.get("store", {}).get(
+            "pool_limit", 0
+        ),
+        "logic_memory_root_dir": logic_memory_config.get("store", {}).get(
+            "memory_root_dir", ""
         ),
         # Problem analysis configuration
         "analysis_model": analysis_config.get("model", "qwen:qwen-flash"),
@@ -371,6 +387,15 @@ def create_memory_context(config: dict[str, Any]):
         ),
         "visual_embedding_model": visual_memory_config.get("store", {}).get(
             "embedding_model", "qwen:qwen2.5-vl-embedding"
+        ),
+        "visual_memory_pool_limit": visual_memory_config.get("store", {}).get(
+            "pool_limit", 0
+        ),
+        "visual_memory_root_dir": visual_memory_config.get("store", {}).get(
+            "memory_root_dir", ""
+        ),
+        "visual_embedding_batch_size": visual_memory_config.get("store", {}).get(
+            "embedding_batch_size", 5
         ),
         "visual_embedding_top_n": visual_memory_config.get("store", {}).get(
             "embedding_top_n", 10
@@ -868,7 +893,7 @@ async def run_evaluation(
             images_dir=images_dir,
             benchmark_dir=benchmark_dir,
             model=context.visual_embedding_model,
-            batch_size=5,
+            batch_size=context.visual_embedding_batch_size,
         )
 
         # Validate embeddings completeness based on dataset-referenced images

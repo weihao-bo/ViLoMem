@@ -7,7 +7,7 @@ for accuracy comparison.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional, Sequence
+from typing import Any, Sequence
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph import add_messages
@@ -29,7 +29,7 @@ class InputState:
     Uses add_messages annotation to merge new messages with existing ones.
     """
 
-    gold_answer: Optional[str] = field(default=None)
+    gold_answer: str | None = field(default=None)
     """
     The expected correct answer for verification (optional).
     Only provided during evaluation.
@@ -43,36 +43,36 @@ class State(InputState):
     Extends InputState with additional fields for tracking reasoning and verification.
     """
 
-    prediction: Optional[str] = field(default=None)
+    prediction: str | None = field(default=None)
     """
     The model's predicted answer extracted from the final response.
     Populated by the reasoning node after model inference.
     """
 
-    verified: Optional[bool] = field(default=None)
+    verified: bool | None = field(default=None)
     """
     Whether the prediction matches the gold answer.
     Populated by the verification node if gold_answer is provided.
     """
 
-    verification_error: Optional[str] = field(default=None)
+    verification_error: str | None = field(default=None)
     """
     Error message if verification fails.
     Stores exception details from the math-verify grader.
     """
 
-    extracted_option: Optional[str] = field(default=None)
+    extracted_option: str | None = field(default=None)
     """
     Extracted option letter for MCQ questions (e.g., 'A', 'B', 'C').
     Populated by VLMEvalKit matching logic.
     """
 
-    extracted_answer: Optional[str] = field(default=None)
+    extracted_answer: str | None = field(default=None)
     """
     Parsed/normalized answer extracted during verification (e.g., numeric value).
     """
 
-    verification_method: Optional[str] = field(default=None)
+    verification_method: str | None = field(default=None)
     """
     Method used for verification (e.g., 'can_infer', 'parse_multi_choice', 'math_verify').
     Helps track how the answer was verified.
@@ -83,10 +83,10 @@ class State(InputState):
     Detailed logs of each verification stage (VLMEval → parser → math_verify).
     """
 
-    model_user_prompt: Optional[str] = field(default=None)
+    model_user_prompt: str | None = field(default=None)
     """Actual user-side prompt text sent to the model."""
 
-    model_system_prompt: Optional[str] = field(default=None)
+    model_system_prompt: str | None = field(default=None)
     """System prompt content used for the model call."""
 
     model_prompt_metadata: dict[str, Any] = field(default_factory=dict)
@@ -100,23 +100,23 @@ class EvaluationState(State):
     Adds fields for tracking evaluation metadata and output paths.
     """
 
-    question: Optional[str] = field(default=None)
+    question: str | None = field(default=None)
     """The original question text for logging purposes."""
 
-    example_id: Optional[str] = field(default=None)
+    example_id: str | None = field(default=None)
     """Unique identifier for this example (from LangSmith dataset)."""
 
-    output_dir: Optional[str] = field(default=None)
+    output_dir: str | None = field(default=None)
     """Directory path where evaluation results should be saved."""
 
-    image_path: Optional[str] = field(default=None)
+    image_path: str | None = field(default=None)
     """Image filename from attachments (e.g., '981.jpg')."""
 
-    task: Optional[str] = field(default=None)
+    task: str | None = field(default=None)
     """Task type from dataset metadata (e.g., 'figure question answering')."""
 
     # ========== Benchmark-specific fields (for VLMEvalKit integration) ==========
-    benchmark_config: Optional[Any] = field(default=None)
+    benchmark_config: Any | None = field(default=None)
     """Benchmark-specific prompt configuration (BenchmarkPromptConfig instance)."""
 
     sample_metadata: dict[str, Any] = field(default_factory=dict)

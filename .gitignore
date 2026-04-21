@@ -255,6 +255,26 @@ logs/
 *.safetensors
 *.h5
 *.hdf5
+datasets/
+
+# ========== LaTeX Auxiliary Files ==========
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.lof
+*.lot
+*.out
+*.toc
+*.synctex.gz
+*.nav
+*.snm
+*.vrb
+rebuttal.tex
+
+# ========== Memory / Runtime Artifacts ==========
+memory/
 
 # ========== Temporary Files ==========
 *.tmp

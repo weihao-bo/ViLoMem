@@ -17,8 +17,9 @@ from typing import Any, Dict
 from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.runtime import Runtime
 
+from common.models import load_chat_model
 from common.prompt_utils import build_combined_prompt
-from common.utils import get_message_text, load_chat_model
+from common.utils import get_message_text
 from common.verification import verify_prediction
 from vl_agent.context import (
     ERROR_ANALYSIS_PROMPT,
@@ -225,8 +226,16 @@ async def verify_answer(
         question=state.question if isinstance(state, EvaluationState) else None,
     )
 
+    score = verification.get("score", 1.0 if verification["verified"] else 0.0)
+
+    # Determine if memory should be generated based on score threshold
+    threshold = runtime.context.memory_generation_score_threshold
+    should_generate_memory = score < threshold
+
     result: Dict[str, Any] = {
         "verified": verification["verified"],
+        "verification_score": score,
+        "should_generate_memory": should_generate_memory,
         "verification_method": verification.get("verification_method"),
         "verification_error": verification.get("verification_error"),
         "verification_attempts": verification.get("verification_attempts", []),
@@ -284,6 +293,7 @@ async def save_output(
         "prediction": state.prediction,
         "gold_answer": state.gold_answer,
         "verified": state.verified,
+        "verification_score": state.verification_score,
         "verification_error": state.verification_error,
         "timestamp": datetime.now().isoformat(),
         # Logic Memory fields
@@ -348,6 +358,13 @@ async def save_output(
         total = len(data["results"])
         verified = sum(1 for r in data["results"] if r.get("verified"))
 
+        # Calculate average score (for continuous metrics like ANLS)
+        scores = [
+            r.get("verification_score", 1.0 if r.get("verified") else 0.0)
+            for r in data["results"]
+        ]
+        avg_score = sum(scores) / len(scores) if scores else 0.0
+
         # Logic memory statistics
         logic_memories_generated = sum(
             1 for r in data["results"] if r.get("generated_logic_memory", "").strip()
@@ -369,6 +386,8 @@ async def save_output(
                 "total_examples": total,
                 "verified_count": verified,
                 "accuracy": verified / total if total > 0 else 0,
+                "avg_score": avg_score,  # Average verification score (ANLS for DocVQA, accuracy for binary)
+                "memory_generation_score_threshold": runtime.context.memory_generation_score_threshold,
                 "logic_memory_retrieval_enabled": runtime.context.logic_memory_enable_retrieval,
                 "logic_memory_generation_enabled": runtime.context.logic_memory_enable_generation,
                 "visual_memory_retrieval_enabled": runtime.context.visual_memory_enable_retrieval,
@@ -441,21 +460,38 @@ async def retrieve_logic_memories(
         }
 
     # ========== Retrieve Memories ==========
-    # Skip retrieval if no output directory
-    if not state.output_dir:
+    # Determine memory root directory
+    # Priority: logic_memory_root_dir > output_dir
+    if runtime.context.logic_memory_root_dir:
+        memory_root = Path(runtime.context.logic_memory_root_dir)
+        logger.info(f"Using dedicated memory root directory: {memory_root}")
+    elif state.output_dir:
+        memory_root = Path(state.output_dir)
+    else:
+        # Skip retrieval if no directory available
         return {
             "retrieved_memories": [],
             "retrieved_memory_ids": [],
         }
 
     # Resolve memory file path
-    memory_file = Path(state.output_dir) / runtime.context.logic_memory_file_path
+    memory_file = memory_root / runtime.context.logic_memory_file_path
     logger.info(f"Loading logic memories from: {memory_file}")
     logger.info(f"Memory file exists: {memory_file.exists()}")
 
     # Load all memories from JSON
     memories = load_memories(memory_file)
-    logger.info(f"Loaded {len(memories)} logic memories from storage")
+    total_loaded = len(memories)
+
+    # Apply pool_limit if configured (truncate to first N memories)
+    pool_limit = runtime.context.logic_memory_pool_limit
+    if pool_limit > 0 and len(memories) > pool_limit:
+        memories = memories[:pool_limit]
+        logger.info(
+            f"Loaded {total_loaded} logic memories, truncated to {pool_limit} (pool_limit)"
+        )
+    else:
+        logger.info(f"Loaded {len(memories)} logic memories from storage")
 
     if not memories:
         if runtime.context.memory_list:
@@ -500,7 +536,7 @@ async def retrieve_logic_memories(
             query=query,
             memories=memories,
             memory_type="logic",
-            output_dir=Path(state.output_dir),
+            output_dir=memory_root,  # Use memory_root for text embeddings cache
             model=runtime.context.logic_memory_embedding_model,
             top_n=runtime.context.logic_memory_retrieval_limit,
             similarity_threshold=runtime.context.logic_memory_similarity_threshold,
@@ -541,8 +577,9 @@ async def retrieve_logic_memories(
             memory_id = memory.get("memory_id", "")
             if memory_id:
                 memory_ids.append(memory_id)
-                # Update usage count in JSON file
-                update_memory_usage(memory_file, memory_id, timestamp)
+                # Retrieval-only mode: skip updating usage to avoid concurrent writes
+                if runtime.context.logic_memory_enable_generation:
+                    update_memory_usage(memory_file, memory_id, timestamp)
             logger.debug(
                 f"Retrieved logic memory (score={score:.4f}): {memory['guideline'][:100]}..."
             )
@@ -645,10 +682,6 @@ async def generate_logic_memory(
         # Resolve memory file path
         memory_file = Path(state.output_dir) / runtime.context.logic_memory_file_path
 
-        # Load existing memories for similarity check
-        existing_memories = load_memories(memory_file)
-
-        # Create new memory
         memory_id = str(uuid.uuid4())
 
         # Create memory entry
@@ -820,8 +853,15 @@ async def retrieve_visual_memories(
     if not state.image_urls:
         return {"retrieved_visual_memories": [], "retrieved_visual_memory_ids": []}
 
-    # Skip if no output directory
-    if not state.output_dir:
+    # Determine memory root directory
+    # Priority: visual_memory_root_dir > output_dir
+    if runtime.context.visual_memory_root_dir:
+        visual_memory_root = Path(runtime.context.visual_memory_root_dir)
+        logger.info(f"Using dedicated visual memory root directory: {visual_memory_root}")
+    elif state.output_dir:
+        visual_memory_root = Path(state.output_dir)
+    else:
+        # Skip if no directory available
         return {"retrieved_visual_memories": [], "retrieved_visual_memory_ids": []}
 
     # Skip if no image_path (required for benchmark-scoped path construction)
@@ -831,7 +871,7 @@ async def retrieve_visual_memories(
 
     # Resolve visual memory file path
     visual_memory_file = (
-        Path(state.output_dir) / runtime.context.visual_memory_file_path
+        visual_memory_root / runtime.context.visual_memory_file_path
     )
 
     # Load all visual memories from JSON
@@ -843,6 +883,18 @@ async def retrieve_visual_memories(
     )
 
     visual_memories = load_memories(visual_memory_file)
+    total_loaded = len(visual_memories)
+
+    # Apply pool_limit if configured (truncate to first N memories)
+    pool_limit = runtime.context.visual_memory_pool_limit
+    if pool_limit > 0 and len(visual_memories) > pool_limit:
+        visual_memories = visual_memories[:pool_limit]
+        logger.info(
+            f"Loaded {total_loaded} visual memories, truncated to {pool_limit} (pool_limit)"
+        )
+    else:
+        logger.info(f"Loaded {len(visual_memories)} visual memories from storage")
+
     if not visual_memories:
         return {"retrieved_visual_memories": [], "retrieved_visual_memory_ids": []}
 
@@ -970,7 +1022,7 @@ async def retrieve_visual_memories(
                     query=text_query,
                     memories=candidate_memories,
                     memory_type="visual",
-                    output_dir=Path(state.output_dir),
+                    output_dir=visual_memory_root,  # Use visual_memory_root for text embeddings cache
                     model=runtime.context.visual_memory_text_embedding_model,
                     top_n=runtime.context.visual_memory_retrieval_limit,
                     similarity_threshold=runtime.context.visual_memory_similarity_threshold,
@@ -1024,8 +1076,9 @@ async def retrieve_visual_memories(
             memory_id = memory.get("memory_id", "")
             if memory_id:
                 memory_ids.append(memory_id)
-                # Update usage count in JSON file
-                update_memory_usage(visual_memory_file, memory_id, timestamp)
+                # Retrieval-only mode: skip updating usage to avoid concurrent writes
+                if runtime.context.visual_memory_enable_generation:
+                    update_memory_usage(visual_memory_file, memory_id, timestamp)
 
     # ========== Heatmap Generation (Optional) ==========
     heatmap_text = None
@@ -1056,47 +1109,15 @@ async def retrieve_visual_memories(
             logger.info("Prepended question to heatmap text")
             logger.debug(f"Final heatmap text: {heatmap_text[:200]}...")
 
-        # Step 2: Generate heatmap using selected method
-        heatmap_method = runtime.context.heatmap_method.lower()
-        # Use the first image from state.image_urls (base64 URL)
+        # Only Qwen2.5-VL cross-attention heatmap is supported in this release.
+        heatmap_method = "qwen25vl-attention"
         original_image_url = state.image_urls[0] if state.image_urls else None
 
         if not original_image_url:
             logger.warning("Cannot generate heatmap: no image URLs available")
         else:
             try:
-                if heatmap_method == "grad-eclip":
-                    from vl_agent.heatmap_grad_eclip import (
-                        generate_grad_eclip_heatmap,
-                    )
-
-                    logger.info("Generating Grad-Eclip heatmap")
-                    heatmap_overlaid_image_url = await generate_grad_eclip_heatmap(
-                        image_url=original_image_url,
-                        text=heatmap_text,
-                        model_name=runtime.context.gradcam_model,
-                        output_dir=state.output_dir,
-                        example_id=state.example_id,
-                        benchmark=runtime.context.current_benchmark,
-                        debug=runtime.context.debug_heatmap,
-                        device=runtime.context.gradcam_device,
-                        withksim=True,  # Enable Q-K similarity weighting
-                    )
-                elif heatmap_method == "gradcam":
-                    from vl_agent.heatmap_gradcam import generate_gradcam_heatmap
-
-                    logger.info("Generating GradCAM heatmap")
-                    heatmap_overlaid_image_url = await generate_gradcam_heatmap(
-                        image_url=original_image_url,
-                        text=heatmap_text,
-                        model_name=runtime.context.gradcam_model,
-                        output_dir=state.output_dir,
-                        example_id=state.example_id,
-                        benchmark=runtime.context.current_benchmark,
-                        debug=runtime.context.debug_heatmap,
-                        device=runtime.context.gradcam_device,
-                    )
-                elif heatmap_method == "qwen25vl-attention":
+                if heatmap_method == "qwen25vl-attention":
                     from vl_agent.heatmap_qwen25vl import (
                         generate_qwen25vl_attention_heatmap,
                     )
@@ -1108,7 +1129,7 @@ async def retrieve_visual_memories(
                     )
                     heatmap_overlaid_image_url = await generate_qwen25vl_attention_heatmap(
                         image_url=original_image_url,
-                        text=heatmap_text,  # Supports long text (no 77 token limit!)
+                        text=heatmap_text,
                         model_name=runtime.context.qwen25vl_model,
                         general_prompt=runtime.context.qwen25vl_general_prompt,
                         attention_layer=runtime.context.qwen25vl_attention_layer,
@@ -1122,7 +1143,7 @@ async def retrieve_visual_memories(
                 else:
                     raise ValueError(
                         f"Invalid heatmap_method: '{heatmap_method}'. "
-                        f"Supported methods: 'gradcam', 'grad-eclip', 'qwen25vl-attention'"
+                        f"Only 'qwen25vl-attention' is supported."
                     )
 
                 logger.info(
@@ -1361,10 +1382,6 @@ async def generate_visual_memory(
         )
 
         # Load existing visual memories for similarity check
-        from vl_agent.memory import (
-            load_memories,
-            retrieve_visual_memories_by_similarity,
-        )
 
         # Create new visual memory
         # Note: Image embeddings will be automatically computed and cached

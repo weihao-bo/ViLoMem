@@ -15,6 +15,11 @@ Weihao Bo<sup>1,2</sup>, Shan Zhang<sup>3</sup>, Yanpeng Sun<sup>4</sup>, Jingji
 
 </div>
 
+## 🔥 News
+
+- `2026.04` 🌟 Updated the open-source release of **ViLoMem** — a plug-in dual-stream memory agent (baseline + memory-enabled) that runs on top of any VLMEvalKit benchmark with a single reference config per mode.
+- `2026.02` 🌟 Our paper is accepted to **CVPR 2026**! The camera-ready version will be released on arXiv and linked here soon.
+
 <div align="center">
   <img src="assets/motivation-1.png" width="40%">
   <p>
@@ -58,7 +63,7 @@ uv venv --python 3.11
 source .venv/bin/activate
 
 # Install dependencies
-uv pip install -e .
+uv sync
 ```
 
 ### 2. Configuration
@@ -72,80 +77,96 @@ cp .env.example .env
 Edit `.env` and set the following variables:
 
 ```bash
-# Required: Dataset root directory
+# ========== Required Configuration ==========
+# Dataset root directory
 DATASET_ROOT_DIR=/path/to/your/datasets
 
-# Required: OpenAI-compatible API endpoint
+# OpenAI-compatible API endpoint (for openai: prefix models)
 OPENAI_API_KEY=your_api_key_here
 OPENAI_API_BASE=https://api.openai.com/v1
 
-# Optional: LangSmith tracing
+# ========== Optional: DashScope API (for Qwen models) ==========
+# Used by qwen: prefix models and visual embedding (qwen:qwen2.5-vl-embedding)
+DASHSCOPE_API_KEY=your_dashscope_api_key_here
+
+# ========== Optional: Local vLLM Configuration ==========
+# Used by local: prefix models (e.g., local:qwen3-vl-8b-instruct)
+LOCAL_VLLM_API_BASE=http://localhost:8000/v1
+LOCAL_VLLM_API_KEY=not-needed
+
+# ========== Optional: Local Embedding API ==========
+# Required for Logic Memory and Visual Memory text-based retrieval
+# when using local:qwen3-embedding as embedding model
+LOCAL_EMBEDDING_BASE_URL=http://localhost:18500/v1
+LOCAL_EMBEDDING_API_KEY=not-needed
+
+# ========== Optional: LLM Judge Configuration ==========
+# Fallback model for answer verification when rule-based methods fail
+# Format: provider:model-name (e.g., openai:gpt-4.1-mini, qwen:qwen-plus)
+VLMEVAL_JUDGE_MODEL=openai:gpt-4.1-mini
+
+# ========== Optional: LangSmith Tracing ==========
 LANGCHAIN_TRACING_V2=false
 LANGCHAIN_API_KEY=your_langsmith_key_here
+LANGCHAIN_PROJECT=vilomem-eval
+
+# ========== Optional: Regional Configuration ==========
+# Set to 'prc' or 'cn' for Chinese mainland endpoints (DashScope)
+REGION=international
 ```
+
+### Embedding Services
+
+Embeddings are used **only by the memory-enabled (`config/ViLoMem/*.yaml`) agent** — the baseline agent does not call any embedding endpoint.
+
+| Purpose | Default in config | Env variables | Endpoint contract |
+|---|---|---|---|
+| Text embedding — logic-memory retrieval and visual-memory text re-rank | `local:qwen3-embedding` (we report results with **Qwen3-Embedding-8B**) | `LOCAL_EMBEDDING_BASE_URL`, `LOCAL_EMBEDDING_API_KEY` | **Any OpenAI-compatible `/v1/embeddings` endpoint.** Swap in whatever model ID your endpoint serves and edit the two `*embedding_model` fields in the ViLoMem config accordingly. |
+| Visual embedding — image retrieval and per-benchmark image pre-embedding | `qwen:qwen2.5-vl-embedding` (**Qwen2.5-VL-Embedding** via DashScope `multimodal-embedding`) | `DASHSCOPE_API_KEY` | DashScope multimodal-embedding; region chosen by `REGION` (`prc|cn` → `dashscope.aliyuncs.com`, otherwise `dashscope-intl.aliyuncs.com`). Pre-computed `.npy` caches are written next to each benchmark so subsequent runs skip the network call. |
+
+If you only need the baseline numbers, configure only `OPENAI_API_KEY` / `OPENAI_API_BASE` and skip both services.
 
 ### 3. Running Evaluations
 
-#### Baseline Agent (No Memory)
+Baseline agent (no memory, requires only OpenAI key):
 
 ```bash
 uv run python run_agent_eval.py --config config/baseline/MathVista_MINI.yaml
 ```
 
-#### Memory-Enabled Agent
+ViLoMem agent (dual-stream memory):
 
 ```bash
 uv run python run_agent_eval.py --config config/ViLoMem/MathVista_MINI.yaml
 ```
 
-### 4. Resume Previous Run
+Resume an interrupted run by pointing `--resume` at the previous output directory:
 
 ```bash
 uv run python run_agent_eval.py --config config/baseline/MathVista_MINI.yaml --resume output/baseline_gpt-4.1/MathVista_MINI
 ```
 
-## Configuration Files
+### 4. Switching Benchmarks
 
-### Baseline Configuration (`config/baseline/MathVista_MINI.yaml`)
+Only one reference config per mode is shipped (`config/baseline/MathVista_MINI.yaml`, `config/ViLoMem/MathVista_MINI.yaml`). To evaluate another benchmark, duplicate the file and change the `dataset.benchmark` field — VLMEvalKit will auto-download the dataset on first run into `DATASET_ROOT_DIR`.
 
-```yaml
-# Dataset Configuration
-dataset:
-  root_dir: "${DATASET_ROOT_DIR}"  # Set via environment variable
-  benchmark: "MathVista_MINI"
-  start_index: 1
-  limit: 0  # 0 means process all examples
-
-# Model Configuration
-model:
-  name: "openai:gpt-4.1"  # GPT-4.1 via OpenAI-compatible endpoint
-  temperature: 0.7
-  max_tokens: 10240
-
-# Output Configuration
-output:
-  dir_prefix: "output/baseline_gpt-4.1"
-  enable_tracing: false
-
-# Verification Configuration
-verification:
-  enable: true
-
-# Concurrent Execution
-concurrent_execution:
-  max_workers: 20
+```bash
+cp config/ViLoMem/MathVista_MINI.yaml config/ViLoMem/MathGlance.yaml
+# edit: dataset.benchmark → "MathGlance"
+uv run python run_agent_eval.py --config config/ViLoMem/MathGlance.yaml
 ```
 
-### ViLoMem Configuration (`config/ViLoMem/MathVista_MINI.yaml`)
+### 5. Reusing Memories Across Runs
 
-The memory-enabled configuration includes additional sections for:
+The `output.memory_list` field in any ViLoMem config accepts a list of prior output directories. Their `logic_memories.json` and `visual_memories.json` are merged in before evaluation starts, so memories learned on one benchmark can seed another run:
 
-- **Logic Memory**: Stores and retrieves guidelines for logical reasoning errors
-- **Visual Memory**: Stores and retrieves guidelines for visual understanding errors
-- **Heatmap Generation**: Generates attention heatmaps for visual analysis
-- **Memory Reuse**: Supports memory reuse across evaluation runs
-
-See `config/ViLoMem/MathVista_MINI.yaml` for full configuration options.
+```yaml
+output:
+  dir_prefix: "output/ViLoMem_gpt-4.1"
+  memory_list:
+    - "output/ViLoMem_gpt-4.1/WeMath"
+    - "output/ViLoMem_gpt-4.1/MathGlance"
+```
 
 ## Project Structure
 

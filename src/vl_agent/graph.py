@@ -51,12 +51,17 @@ from vl_agent.state import EvaluationState
 
 
 def should_analyze_error(state: EvaluationState) -> str | list[str]:
-    """Route based on verification result.
+    """Route based on verification score and threshold.
 
-    If verified, go to save_output.
-    If not verified, trigger parallel error analysis (fan-out to both generate nodes).
+    Memory generation is triggered when:
+    - should_generate_memory is True (score < threshold)
+    - This handles both binary benchmarks (verified=False → score=0.0)
+    - And continuous benchmarks like ANLS (score < 0.7)
+
+    If should_generate_memory is False, go directly to save_output.
+    If should_generate_memory is True, trigger parallel error analysis.
     """
-    if state.verified:
+    if not state.should_generate_memory:
         return "save_output"
     # Fan-out to both generate nodes for parallel execution
     return ["generate_logic_memory", "generate_visual_memory"]

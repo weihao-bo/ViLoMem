@@ -42,7 +42,7 @@ class BenchmarkPromptConfig:
     @classmethod
     def from_benchmark_meta(
         cls, benchmark_meta: dict[str, Any]
-    ) -> "BenchmarkPromptConfig":
+    ) -> BenchmarkPromptConfig:
         """Create config from benchmark metadata.
 
         Args:

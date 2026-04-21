@@ -1,29 +1,32 @@
-# ViLoMem Agent Configuration
-# This configuration file enables both logic and visual memory functionality
+# Memory-enabled ViLoMem agent — reference configuration.
+#
+# Usage:
+#   - Switch benchmark: copy this file and change `dataset.benchmark` (any
+#     VLMEvalKit dataset supported by `src/common/verifiers/` or the
+#     VLMEvalKit fallback pipeline).
+#   - Reuse memories from prior runs: list the previous output directories
+#     in `output.memory_list` below. Their `logic_memories.json` and
+#     `visual_memories.json` are merged before evaluation starts.
+#   - Text / image embedding endpoints: see the "Embedding Services"
+#     section of README.md.
 
-# ========== Dataset Configuration ==========
 dataset:
-  root_dir: "${DATASET_ROOT_DIR}"  # Set via environment variable
+  root_dir: "${DATASET_ROOT_DIR}"
   benchmark: "MathVista_MINI"
   split: null
   path: null
   start_index: 1
-  # Number of samples to process:
-  # - Set to 0 to process ALL examples
-  # - Set to N (e.g., 2, 10, 100) to process only first N examples
-  limit: 2
+  limit: 0             # 0 = process all examples; set to N for smoke tests.
   task_filter: null
   force_reconvert: false
 
-# ========== Output Configuration ==========
 output:
   dir_prefix: "output/ViLoMem_gpt-4.1"
   enable_tracing: false
-  memory_list: []  # List of previous output directories for memory reuse
+  memory_list: []      # e.g. ["output/ViLoMem_gpt-4.1/WeMath"] to seed memories from a prior run.
 
-# ========== Main Inference Model Configuration ==========
 model:
-  name: "openai:openai/gpt-4.1"  # GPT-4.1 via OpenRouter
+  name: "openai:gpt-4.1-mini"     # Main solver (any provider:model resolved by src/common/models/registry.py).
   temperature: 0.7
   max_tokens: 8192
   system_prompt: |-
@@ -38,11 +41,13 @@ model:
 
     Question:
 
-# ========== Verification Configuration ==========
 verification:
   enable: true
 
-# ========== Logic Memory Configuration ==========
+memory:
+  generation_score_threshold: 0.7   # Generate new memories only when verification_score < threshold.
+
+# ---------- Logic Memory (text-only guidelines distilled from logical errors) ----------
 logic_memory:
   retrieval:
     enable: true
@@ -52,45 +57,44 @@ logic_memory:
     enable: true
   store:
     file_path: "logic_memories.json"
-    embedding_model: "local:qwen3-embedding"
+    embedding_model: "local:qwen3-embedding"   # Any OpenAI-compatible /v1/embeddings endpoint.
 
-# ========== Problem Analysis Node Configuration ==========
-analysis:
-  model: "openai:openai/gpt-4.1"
+analysis:                             # Problem-analysis node (subject + key-concept extraction).
+  model: "openai:gpt-4.1-mini"
   temperature: 0.7
   max_tokens: 1024
 
-# ========== Logic Memory Generation Node Configuration ==========
-logic_memory_generation:
-  model: "openai:openai/gpt-4.1"
+logic_memory_generation:              # MLLM used to write new logic-memory entries on failure.
+  model: "openai:gpt-4.1-mini"
   temperature: 0.7
   max_tokens: 2048
 
-# ========== Visual Memory Configuration ==========
+# ---------- Visual Memory (image + text guidelines for perceptual errors) ----------
 visual_memory:
   retrieval:
-    enable: false  # Disabled for testing without local embedding model
+    enable: true
     limit: 3
     similarity_threshold: 0.7
     enable_text_rerank: true
   generation:
-    enable: false  # Disabled for testing without local embedding model
+    enable: true
   store:
     file_path: "visual_memories.json"
-    embedding_model: "qwen:qwen2.5-vl-embedding"
+    embedding_model: "qwen:qwen2.5-vl-embedding"   # DashScope multimodal embedding.
+    embedding_batch_size: 10
     embedding_top_n: 10
     text_embedding_model: "local:qwen3-embedding"
 
-# ========== Visual Memory Generation Node Configuration ==========
 visual_memory_generation:
-  model: "openai:openai/gpt-4.1"
+  model: "openai:gpt-4.1-mini"
   temperature: 0.7
   max_tokens: 2048
 
-# ========== Heatmap Generation Configuration (Qwen2.5-VL Attention) ==========
+# ---------- Optional: Qwen2.5-VL attention heatmap (paper §Appendix) ----------
+# Requires a local Qwen2.5-VL deployment (GPU). Disable if you only need the text pipeline.
 heatmap_generation:
-  enable: false  # Disabled - requires local Qwen2.5-VL model deployment
-  debug: true  # Save heatmap images for debugging
+  enable: false
+  debug: true
   include_question_in_heatmap: true
   qwen25vl:
     model: Qwen/Qwen2.5-VL-3B-Instruct
@@ -100,6 +104,5 @@ heatmap_generation:
       - cuda:0
     per_device_max_parallel: 5
 
-# ========== Concurrent Execution Configuration ==========
 concurrent_execution:
-  max_workers: 1
+  max_workers: 100

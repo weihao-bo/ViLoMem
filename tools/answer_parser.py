@@ -53,7 +53,7 @@ class AnswerParserConfig:
     text_strip_punctuation: bool = True
 
     @classmethod
-    def from_sample_metadata(cls, metadata: dict) -> "AnswerParserConfig":
+    def from_sample_metadata(cls, metadata: dict) -> AnswerParserConfig:
         """Create config from sample metadata.
 
         Args:

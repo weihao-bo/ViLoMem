@@ -15,7 +15,6 @@ Based on: https://github.com/open-compass/VLMEvalKit
 from __future__ import annotations
 
 import random
-import re
 import string
 from typing import Any
 

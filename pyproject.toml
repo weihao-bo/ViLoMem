@@ -10,34 +10,33 @@ license = { text = "MIT" }
 requires-python = ">=3.11,<4.0"
 urls = { Homepage = "https://github.com/weihao-bo/ViLoMem", Repository = "https://github.com/weihao-bo/ViLoMem" }
 dependencies = [
-    "langgraph>=0.6.0,<0.7.0",
-    "langchain-openai>=0.1.22",
-    "langchain>=0.2.14",
+    # LangChain / LangGraph
+    "langgraph>=1.0.0",
+    "langchain>=1.2.0",
+    "langchain-core>=1.2.0",
+    "langchain-openai>=1.1.0",
+    "langchain-dev-utils>=0.3.0",
+    # Core runtime
     "python-dotenv>=1.0.1",
-    "langchain-qwq>=0.2.1",
     "math-verify>=0.8.0",
-    "langchain-community>=0.3.31",
     "dashscope>=1.24.9",
     "httpx>=0.27.0",
     "pyyaml>=6.0",
-    "open-clip-torch>=2.31.0",
-    "accelerate>=1.1.0",
-    "qwen-vl-utils>=0.0.14",
-    "transformers>=4.44.0",
-    "torch>=2.0.0",
-    "torchvision>=0.15.0",
+    "tqdm>=4.66.0",
+    # Vision / memory pipeline
     "pillow>=10.0.0",
     "numpy>=1.24.0",
     "matplotlib>=3.7.0",
-    "datasets>=4.4.0",
-    "scikit-learn>=1.7.2",
-    "tqdm>=4.66.0",
-    "langchain-siliconflow>=0.1.0",
+    "torch>=2.0.0",
+    "torchvision>=0.15.0",
+    "transformers>=4.44.0",
+    "accelerate>=1.1.0",
+    "qwen-vl-utils>=0.0.14",
+    # Evaluation & dev tools
+    "ms-vlmeval",
+    "mypy>=1.11.1",
+    "ruff>=0.6.1",
 ]
-
-[project.optional-dependencies]
-dev = ["mypy>=1.11.1", "ruff>=0.6.1", "pytest>=8.3.5", "pytest-asyncio>=0.23.0"]
-vlmeval = ["ms-vlmeval"]
 
 [build-system]
 requires = ["setuptools>=73.0.0", "wheel"]
@@ -69,9 +68,3 @@ lint.ignore = [
     "E501",
 ]
 
-[tool.ruff.lint.per-file-ignores]
-"tests/*" = ["UP"]
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
